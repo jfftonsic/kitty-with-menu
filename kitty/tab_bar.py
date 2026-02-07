@@ -559,6 +559,17 @@ class TabExtent(NamedTuple):
         return TabExtent(self.tab_id, CellRange(self.cell_range.start + shift, self.cell_range.end + shift))
 
 
+class MenuEntry(NamedTuple):
+    label: str
+    action: str
+    shortcut: str = ''
+
+
+class MenuExtent(NamedTuple):
+    action: str
+    cell_range: CellRange
+
+
 class TabBar:
 
     def __init__(self, os_window_id: int):
@@ -567,6 +578,8 @@ class TabBar:
         self.data_buffer_size = 0
         self.blank_rects: tuple[Border, ...] = ()
         self.tab_extents: Sequence[TabExtent] = ()
+        self.menu_extents: Sequence[MenuExtent] = ()
+        self.menu_width = 0
         self.laid_out_once = False
         self.apply_options()
 
@@ -723,6 +736,27 @@ class TabBar:
         last_tab = data[-1] if data else None
         ed = ExtraData()
 
+        def draw_menu(record: bool) -> int:
+            s.cursor.x = 0
+            s.cursor.bg = as_rgb(color_as_int(self.draw_data.default_bg))
+            s.cursor.fg = as_rgb(color_as_int(self.draw_data.inactive_fg))
+            extents: list[MenuExtent] = []
+            menu_entries = self.menu_entries()
+            separator = '  '
+            for idx, entry in enumerate(menu_entries):
+                if idx:
+                    s.draw(separator)
+                start = s.cursor.x
+                label = self.format_menu_label(entry)
+                s.draw(label)
+                end = s.cursor.x
+                if record:
+                    extents.append(MenuExtent(entry.action, CellRange(start, end)))
+            if record:
+                self.menu_extents = tuple(extents)
+            s.cursor.bg = s.cursor.fg = 0
+            return s.cursor.x
+
         def draw_tab(i: int, tab: TabBarData, cell_ranges: list[TabExtent], max_tab_length: int) -> None:
             ed.prev_tab = data[i - 1] if i > 0 else None
             ed.next_tab = data[i + 1] if i + 1 < len(data) else None
@@ -741,15 +775,18 @@ class TabBar:
                 s.draw(' …')
                 raise StopIteration()
 
-        unconstrained_tab_length = max(1, s.columns - 2)
+        menu_width = draw_menu(False)
+        self.menu_width = menu_width
+        available_columns = max(1, s.columns - menu_width)
+        unconstrained_tab_length = max(1, available_columns - 2)
         ideal_tab_lengths = [i for i in range(len(data))]
-        default_max_tab_length = max(1, (s.columns // max(1, len(data))) - 1)
+        default_max_tab_length = max(1, (available_columns // max(1, len(data))) - 1)
         max_tab_lengths = [default_max_tab_length for _ in range(len(data))]
         active_idx = 0
         extra = 0
         ed.for_layout = True
         for i, t in enumerate(data):
-            s.cursor.x = 0
+            s.cursor.x = menu_width
             draw_tab(i, t, [], unconstrained_tab_length)
             ideal_tab_lengths[i] = tl = max(1, s.cursor.x)
             if t.is_active:
@@ -772,10 +809,13 @@ class TabBar:
 
         s.cursor.x = 0
         s.erase_in_line(2, False)
+        menu_width = draw_menu(True)
+        self.menu_width = menu_width
         cr: list[TabExtent] = []
         ed.for_layout = False
         for i, t in enumerate(data):
             try:
+                s.cursor.x = max(s.cursor.x, menu_width)
                 draw_tab(i, t, cr, max_tab_lengths[i])
             except StopIteration:
                 break
@@ -790,7 +830,7 @@ class TabBar:
         end = self.tab_extents[-1].cell_range[1]
         if end < self.screen.columns - 1:
             shift = (self.screen.columns - end) // factor
-            self.screen.cursor.x = 0
+            self.screen.cursor.x = self.menu_width
             self.screen.insert_characters(shift)
             self.tab_extents = tuple(te.shifted(shift) for te in self.tab_extents)
 
@@ -805,3 +845,22 @@ class TabBar:
                 if te.cell_range.start <= x <= te.cell_range.end:
                     return te.tab_id
         return 0
+
+    def menu_action_at(self, x: int) -> str | None:
+        if self.laid_out_once:
+            x = (x - self.window_geometry.left) // self.cell_width
+            for me in self.menu_extents:
+                if me.cell_range.start <= x <= me.cell_range.end:
+                    return me.action
+        return None
+
+    def format_menu_label(self, entry: MenuEntry) -> str:
+        if entry.shortcut:
+            return f'{entry.label} ({entry.shortcut})'
+        return entry.label
+
+    def menu_entries(self) -> Sequence[MenuEntry]:
+        return (
+            MenuEntry('New Tab', 'new_tab', 'Ctrl+Shift+T'),
+            MenuEntry('Exit', 'quit'),
+        )

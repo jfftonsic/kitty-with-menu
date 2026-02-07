@@ -1523,6 +1523,11 @@ class TabManager:  # {{{
     def handle_click_on_tab(self, x: int, button: int, modifiers: int, action: int) -> None:
         tab = self.tab_for_id(self.tab_bar.tab_id_at(x))
         now = monotonic()
+        if action == GLFW_RELEASE and button == GLFW_MOUSE_BUTTON_LEFT and tab is None:
+            menu_action = self.tab_bar.menu_action_at(x)
+            if menu_action:
+                self.handle_menu_action(menu_action)
+                return
         if tab is None:
             if button == GLFW_MOUSE_BUTTON_LEFT and action == GLFW_RELEASE and len(self.recent_mouse_events) > 2:
                 ci = get_click_interval()
@@ -1534,8 +1539,8 @@ class TabManager:  # {{{
                     now - prev.at <= ci and now - prev2.at <= 2 * ci
                 ):  # double click
                     self.new_tab()
-                    self.recent_mouse_events.clear()
-                    return
+                self.recent_mouse_events.clear()
+                return
         else:
             if action == GLFW_PRESS and button == GLFW_MOUSE_BUTTON_LEFT:
                 self.set_active_tab(tab)
@@ -1546,6 +1551,13 @@ class TabManager:  # {{{
         self.recent_mouse_events.append(TabMouseEvent(button, modifiers, action, now, tab.id if tab else 0))
         if len(self.recent_mouse_events) > 5:
             self.recent_mouse_events.popleft()
+
+    def handle_menu_action(self, action: str) -> None:
+        boss = get_boss()
+        if action == 'new_tab':
+            self.new_tab()
+        elif action == 'quit':
+            boss.quit()
 
     def update_progress(self) -> None:
         self.num_of_windows_with_progress = 0
